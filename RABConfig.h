@@ -1,6 +1,20 @@
 #import <Foundation/Foundation.h>
+#import <stdlib.h>
 
 NS_ASSUME_NONNULL_BEGIN
+
+/**
+ * RABRand — triangular random in [min,max] (average of two uniforms).
+ * Everything the tweak randomizes uses this instead of a flat uniform:
+ * the resulting cadence clusters around the middle of each range the way
+ * real human behavior does (no suspicious uniform plateaus).
+ */
+static inline double RABRand(double min, double max) {
+    if (max <= min) return min;
+    double r1 = (double)arc4random() / 4294967296.0;
+    double r2 = (double)arc4random() / 4294967296.0;
+    return min + ((r1 + r2) / 2.0) * (max - min);
+}
 
 /**
  * RABConfig — all tweak settings.

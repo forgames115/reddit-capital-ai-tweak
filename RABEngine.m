@@ -17,6 +17,16 @@ static BOOL RABForeground(void) {
 
 static double RABNow(void) { return [[NSDate date] timeIntervalSince1970]; }
 
+/** Fractional sleep in ≤250 ms chunks (usleep is unreliable above 1 s). */
+static void RABSleep(double seconds) {
+    double left = MAX(0, seconds);
+    while (left > 0) {
+        double chunk = left > 0.25 ? 0.25 : left;
+        usleep((useconds_t)(chunk * 1000000.0));
+        left -= chunk;
+    }
+}
+
 static NSString *RABPreview(NSString *s) {
     if (s.length > 90) return [[s substringToIndex:90] stringByAppendingString:@"…"];
     return s ?: @"";
@@ -163,9 +173,8 @@ static NSString *RABPreview(NSString *s) {
                     [RABLog line:@"cycle exception: %@ — %@", e.name, e.reason];
                 }
                 double iv = MAX(45, [[RABConfig shared] doubleForKey:@"pollIntervalSec"]);
-                iv *= (0.8 + 0.4 * ((double)arc4random() / UINT32_MAX));   // ±20% jitter
-                double waited = 0;
-                while (waited < iv) { sleep(5); waited += 5; }
+                iv *= RABRand(0.75, 1.35);   // triangular cadence jitter — no two gaps look alike
+                RABSleep(iv);
             }
         }
     });
@@ -176,25 +185,39 @@ static NSString *RABPreview(NSString *s) {
 - (void)warmUpIfDue {
     RABConfig *cfg = [RABConfig shared];
     double now = RABNow();
-    double interval = MAX(60, [cfg doubleForKey:@"warmUpIntervalSec"]);
+    // the interval itself is jittered ±25% on every check — gaps never repeat
+    double interval = MAX(60, [cfg doubleForKey:@"warmUpIntervalSec"]) * RABRand(0.75, 1.25);
     if (now - self.lastWarmUpAt < interval) return;
     if (!RABForeground() || [RABGhost chatScreenVisible]) return;
     self.lastWarmUpAt = now;
 
-    NSInteger swipes = 1 + arc4random_uniform(3);
+    // 2–7 swipes (triangular: short bursts are the most common, like real browsing)
+    NSInteger swipes = 2 + (NSInteger)RABRand(0.0, 5.0);
+    double started = RABNow();
     for (NSInteger i = 0; i < swipes; i++) {
         RABMainSync(^{ [RABGhost scrollFeedWarmUp]; });
-        sleep(1 + arc4random_uniform(3));   // "view" the post for a few seconds
+
+        // "read" whatever landed on screen: 0.8–5.5 s, and every ~4th swipe
+        // a deeper 4–9 s dwell (people stop on interesting posts)
+        double dwell = RABRand(0.8, 5.5);
+        if (arc4random_uniform(4) == 0) dwell += RABRand(4.0, 9.0);
+        RABSleep(dwell);
+
+        // occasionally scroll back up a little before moving on
+        if (arc4random_uniform(100) < 12) {
+            RABMainSync(^{ [RABGhost scrollFeedWarmUp]; });
+            RABSleep(RABRand(0.5, 2.0));
+        }
     }
-    [RABLog line:@"warm-up done (%ld scroll(s))", (long)swipes];
+    [RABLog line:@"warm-up done (%ld swipe(s) in %.1f s)", (long)swipes, RABNow() - started];
 
     if ([cfg boolForKey:@"idleBreaksEnabled"] &&
         (NSInteger)arc4random_uniform(100) < [cfg intForKey:@"idleBreakChancePct"]) {
         NSInteger lo = MAX(10, [cfg intForKey:@"idleBreakMinSec"]);
         NSInteger hi = MAX(lo, [cfg intForKey:@"idleBreakMaxSec"]);
-        NSInteger s = lo + (NSInteger)arc4random_uniform((uint32_t)(hi - lo + 1));
+        NSInteger s = (NSInteger)RABRand((double)lo, (double)hi);
         [RABLog line:@"multi-tasking pause: idle for %lds", (long)s];
-        sleep(s);
+        RABSleep((double)s);
     }
 }
 
@@ -293,15 +316,15 @@ static NSString *RABPreview(NSString *s) {
                 if (disclose) [ud setBool:YES forKey:discKey];
                 [self recordSend];
                 [RABLog line:@"✅ replied to %@ (%@): %@", t[@"author"], t[@"name"], RABPreview(text)];
-                sleep((useconds_t)MAX(5, [cfg intForKey:@"minReplyDelaySec"]));
+                RABSleep(MAX(5, [cfg intForKey:@"minReplyDelaySec"]) * RABRand(0.8, 1.6));
                 // occasional multi-tasking pause between active chatting sessions
                 if ([cfg boolForKey:@"idleBreaksEnabled"] &&
                     (NSInteger)arc4random_uniform(100) < [cfg intForKey:@"idleBreakChancePct"]) {
                     NSInteger lo = MAX(10, [cfg intForKey:@"idleBreakMinSec"]);
                     NSInteger hi = MAX(lo, [cfg intForKey:@"idleBreakMaxSec"]);
-                    NSInteger s = lo + (NSInteger)arc4random_uniform((uint32_t)(hi - lo + 1));
+                    NSInteger s = (NSInteger)RABRand((double)lo, (double)hi);
                     [RABLog line:@"pause between sessions: idle %lds", (long)s];
-                    sleep(s);
+                    RABSleep((double)s);
                 }
             } else {
                 [self stamp:[@"rab_replied_" stringByAppendingString:t[@"name"]]];
@@ -395,7 +418,7 @@ static void RABDelayMain(double seconds, void (^block)(void)) {
         // randomized "thinking" delay before typing starts (3–12 s by default)
         NSInteger thinkMin = MAX(0, [cfg intForKey:@"thinkDelayMinSec"]);
         NSInteger thinkMax = MAX(thinkMin, [cfg intForKey:@"thinkDelayMaxSec"]);
-        double think = thinkMin + (thinkMax > thinkMin ? (double)arc4random_uniform((uint32_t)(thinkMax - thinkMin + 1)) : 0);
+        double think = RABRand((double)thinkMin, (double)MAX(thinkMin, thinkMax));
         RABDelayMain(think, ^{
             [RABGhost typeText:text
                   intoComposer:composer
@@ -412,7 +435,7 @@ static void RABDelayMain(double seconds, void (^block)(void)) {
                     }
                     if (![RABGhost activateView:send]) { finish(NO); return; }
                     [RABLog line:@"ghost: Send pressed for %@", author];
-                    RABDelayMain(2.5 + (double)arc4random_uniform(1500) / 1000.0, ^{
+                    RABDelayMain(RABRand(2.5, 4.5), ^{
                         if (navigate) {
                             UIView *back = [RABGhost findBackButton];
                             if (back) [RABGhost activateView:back];
@@ -434,7 +457,7 @@ static void RABDelayMain(double seconds, void (^block)(void)) {
             if (tab) [RABGhost activateView:tab];
             else [RABLog line:@"ghost: Chat tab not found (config: labelChatTab) — trying the inbox anyway"];
             // 2) open the target conversation cell
-            RABDelayMain(2.5 + (double)arc4random_uniform(1500) / 1000.0, ^{
+            RABDelayMain(RABRand(2.0, 4.5), ^{
                 UIView *cell = [RABGhost findCellContainingName:author];
                 if (!cell) { [RABLog line:@"ghost: inbox cell for %@ not found (is the inbox list visible?)", author]; finish(NO); return; }
                 [RABGhost activateView:cell];

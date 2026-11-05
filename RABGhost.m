@@ -204,6 +204,9 @@ static BOOL RABInsideSearchBar(UIView *v) {
             else ((UITextField *)composer).text = @"";
             RABLogD(@"typing %lu chars into %@", (unsigned long)text.length, isTextView ? @"UITextView" : @"UITextField");
 
+            // per-message tempo: some messages come out more relaxed than others (0.8–1.4×)
+            double tempo = 0.8 + 0.6 * ((double)arc4random() / UINT32_MAX);
+
             // 1-3 char bursts
             NSMutableArray *chunks = [NSMutableArray array];
             NSUInteger i = 0;
@@ -240,9 +243,9 @@ static BOOL RABInsideSearchBar(UIView *v) {
                     if (done) done(NO);
                     return;
                 }
-                // humanized pacing: base ms/char jittered ±30%, punctuation pauses,
-                // occasional longer hesitation mid-sentence
-                double ms = msPerChar * (double)chunk.length * (0.7 + 0.6 * ((double)arc4random() / UINT32_MAX));
+                // humanized pacing: per-message tempo × ±30% chunk jitter,
+                // punctuation pauses, occasional longer hesitation mid-sentence
+                double ms = msPerChar * tempo * (double)chunk.length * (0.7 + 0.6 * ((double)arc4random() / UINT32_MAX));
                 if (chunk.length) {
                     unichar last = [chunk characterAtIndex:chunk.length - 1];
                     if (last == ' ' || last == '.' || last == ',' || last == '?' || last == '!')
@@ -360,26 +363,55 @@ static BOOL RABInsideSearchBar(UIView *v) {
 /* ------------------------------------------------------------- warm-up */
 
 + (void)scrollFeedWarmUp {
-    UIScrollView *best = nil;
-    CGFloat bestArea = 0;
+    // Pick one of the three largest scrollables (feed, inbox, carousels…) —
+    // a real user hops between lists, so we vary the target too.
+    NSMutableArray *scrolls = [NSMutableArray array];
     for (UIScrollView *sv in [self visibleViewsOfClass:[UIScrollView class]]) {
         if ([sv isKindOfClass:[UITextView class]]) continue;
-        CGFloat area = sv.bounds.size.width * sv.bounds.size.height;
-        if (area > bestArea) { best = sv; bestArea = area; }
+        if (sv.contentSize.height <= sv.bounds.size.height) continue;
+        [scrolls addObject:sv];
     }
-    if (!best || best.contentSize.height <= best.bounds.size.height) {
+    if (!scrolls.count) {
         RABLogD(@"warm-up: no scrollable feed visible");
         return;
     }
-    CGFloat jump = best.bounds.size.height * (0.35 + 0.5 * ((double)arc4random() / UINT32_MAX));
-    if (arc4random_uniform(100) < 20) jump = -jump * 0.6;      // sometimes scroll back up
-    CGPoint target = best.contentOffset;
+    [scrolls sortUsingComparator:^NSComparisonResult(UIScrollView *a, UIScrollView *b) {
+        CGFloat aa = a.bounds.size.width * a.bounds.size.height;
+        CGFloat bb = b.bounds.size.width * b.bounds.size.height;
+        return aa > bb ? NSOrderedAscending : (aa < bb ? NSOrderedDescending : NSOrderedSame);
+    }];
+    UIScrollView *sv = (scrolls.count > 2) ? scrolls[arc4random_uniform(3)] : scrolls[0];
+
+    // random distance: 30–90 % of the screen, sometimes a partial back-scroll (20 %)
+    CGFloat jump = sv.bounds.size.height * RABRand(0.30, 0.90);
+    if (arc4random_uniform(100) < 20) jump = -jump * RABRand(0.4, 0.8);
+    CGPoint target = sv.contentOffset;
     target.y += jump;
-    CGFloat maxY = best.contentSize.height - best.bounds.size.height + best.contentInset.bottom;
-    if (target.y < -best.contentInset.top) target.y = -best.contentInset.top;
-    if (target.y > maxY) target.y = MAX(0, maxY);
-    [best setContentOffset:target animated:YES];
-    [RABLog line:@"warm-up: scrolled feed (%.0f px)", jump];
+    CGFloat maxY = sv.contentSize.height - sv.bounds.size.height + sv.contentInset.bottom;
+    CGFloat minY = -sv.contentInset.top;
+    target.y = MAX(minY, MIN(MAX(0, maxY), target.y));
+
+    // varied speed: 0.35–0.65 s ease-in-out (animated:YES always uses the same fixed duration)
+    double dur = RABRand(0.35, 0.65);
+    CGPoint end = target;
+    [UIView animateWithDuration:dur
+                          delay:0
+                        options:(UIViewAnimationOptionCurveEaseInOut | UIViewAnimationOptionAllowUserInteraction)
+                     animations:^{ [sv setContentOffset:end animated:NO]; }
+                     completion:nil];
+
+    // ~1 in 5: a small "settle" nudge right after the main swipe (finger drift)
+    if (arc4random_uniform(5) == 0) {
+        CGPoint nudge = end;
+        nudge.y += RABRand(30.0, 120.0) * (jump >= 0 ? 1.0 : -1.0);
+        nudge.y = MAX(minY, MIN(MAX(0, maxY), nudge.y));
+        [UIView animateWithDuration:RABRand(0.6, 1.1)
+                              delay:dur
+                            options:UIViewAnimationOptionCurveEaseOut
+                         animations:^{ [sv setContentOffset:nudge animated:NO]; }
+                         completion:nil];
+    }
+    [RABLog line:@"warm-up: scrolled %@ (%.0f px, %.2f s)", NSStringFromClass([sv class]), jump, dur];
 }
 
 /* ----------------------------------------------------------- discovery */

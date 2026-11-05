@@ -31,19 +31,25 @@ the app's own requests, only the Bearer token is refreshed).
 1. **Token + header capture** — hooks `NSURLSession` task creation/resume;
    reads `Authorization: Bearer …` and the full header set of the app's own
    requests (read-only; nothing is modified, nothing leaves the device).
-2. **Poll** — every `pollIntervalSec` (default 180 s, jittered ±20%):
+2. **Poll** — every `pollIntervalSec` (default 180 s, triangular jitter ×0.75–1.35 — gaps never repeat):
    fetch unread PMs → per-target thread history (last 20 messages).
 3. **Think** — randomized 3–12 s pause before typing starts.
 4. **Type** — the reply text is typed into the composer in 1–3 char bursts,
-   180 ms/char average (±30% jitter), extra pauses at punctuation, occasional
-   mid-sentence hesitation; light **haptic taps** while typing; Reddit's own
+   180 ms/char average, **per-message tempo 0.8–1.4×** on top of ±30 %
+   chunk jitter, extra pauses at punctuation, occasional mid-sentence
+   hesitation; light **haptic taps** while typing; Reddit's own
    `is_typing` indicator runs the whole time.
 5. **Send** — presses the real Send button (accessibility activation →
    UIControl actions → synthetic touch, multi-strategy with logging).
 6. **Chat swap** — with `autoNavigate` on, it opens the Chat tab, taps the
    right conversation in the inbox itself, replies, and taps Back.
-7. **Warm-up** — while idle (~every 5 min): simulates feed scrolling and
-   "views" posts for a few seconds; occasional 1–2 min **idle breaks**
+7. **Warm-up (fully randomized)** — while idle (~every 5 min, interval
+   itself jittered ±25 % each check): **2–7 triangular-random swipes** over
+   one of the three largest scrollable lists (30–90 % of the screen per
+   swipe, ease-in-out 0.35–0.65 s, 20 % partial back-scrolls, 1-in-5
+   "finger-drift" settle nudge), **0.8–5.5 s reading dwell** per swipe
+   (every ~4th swipe a deeper 4–9 s stop on a "post"), 12 % chance to
+   scroll back up between swipes, plus occasional 1–2 min **idle breaks**
    between chatting sessions.
 8. **Caps (the anti-ban core)** — daily cap 40, hourly cap 8, per-thread
    cooldown 10 min, ≥ 20 s between replies — **all adjustable in the
@@ -73,6 +79,20 @@ Floats over the app (drag it anywhere). Contains:
 Changes apply instantly (written to the config plist — no respring).
 
 ## Build & install (iOS 17.0.3 + Dopamine)
+
+### Ready-made .deb (no build needed)
+
+The release ships a prebuilt, **ldid fake-signed rootless package**:
+`com.capitalai.redditbridge_2.0.0_iphoneos-arm.deb` (~62 KB) containing
+`/var/jb/usr/lib/TweakInject/RedditAIBridge.dylib` + the filter plist;
+`postinst` restarts Reddit so the tweak loads immediately.
+
+**Install:** download the .deb on the phone (Safari/AirDrop) → open it in
+**Filza** → **Install** → Reddit relaunches → the 🤖 bubble appears after
+~12 s. Works on **Dopamine** (iOS 15–16.6.1) and any `/var/jb`-prefix
+rootless bootstrap on iOS 17 (e.g. TrollStore Bootstrap-style setups).
+
+### Build from source
 
 ```bash
 cd reddit-capital-ai-tweak
