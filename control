@@ -1,0 +1,9 @@
+Package: com.capitalai.redditbridge
+Name: RedditAIBridge
+Version: 2.0.0
+Architecture: iphoneos-arm
+Description: CapitalAI bridge for Reddit — "Ghost" UI-level auto-replies to incoming Reddit private messages. Text is typed into the official app's composer and the real Send button is pressed, so all native app telemetry/headers/TLS stay perfect (no bot fingerprint). Floating options bubble (caps, delays, kill-switch, discovery mode), humanized typing with haptics, auto chat-swapping, feed warm-up, daily/hourly caps, 429/403 kill-switch, transparent-AI disclosure. Reply-only — never starts conversations. iOS 15+ / Dopamine rootless.
+Author: capitalai-amateri project
+Maintainer: capitalai-amateri project
+Section: Tweaks
+Depends: firmware (>= 15.0)
